@@ -33,6 +33,15 @@ const JOG_SHM_BYTES: u64 = 1 << 20;
 /// leaves a generous margin.
 const MAIN_SHM_PREFILL: u64 = 8 * 1024 * 1024;
 
+/// [intel-port] Scale a wait that bounds *guest-side* work by the TCG
+/// slowdown factor (1 under HVF). The constants above are sized for a
+/// near-native guest; under TCG the same guest work takes 20-50x longer and
+/// an expired wait falls through to SIGKILL - a dirty eMMC qcow2. All scaled
+/// call sites are early-exit polls, so only the worst case stretches.
+fn scaled(d: Duration) -> Duration {
+    d * cdj3k_emu_platform::host::guest_time_scale()
+}
+
 /// Graceful child shutdown for use from `on_exit` (main thread, blocking OK).
 /// SIGTERM → up to [`SIGTERM_GRACE`] → SIGKILL.
 pub fn kill_qemu_child() {
@@ -209,7 +218,14 @@ impl QemuInstance {
             })
             .expect("failed to spawn QEMU monitor thread");
 
-        let qmp = QmpClient::connect_with_retry(config.qmp_port, Duration::from_secs(15))?;
+        // [intel-port] The QMP listener comes up during host-speed machine
+        // init, before any guest code runs, so scale mildly (TCG init
+        // overhead only, capped at 4x) - full guest scaling would delay
+        // startup-failure diagnosis by many minutes for no benefit.
+        let qmp = QmpClient::connect_with_retry(
+            config.qmp_port,
+            Duration::from_secs(15) * cdj3k_emu_platform::host::guest_time_scale().min(4),
+        )?;
 
         Ok(Self {
             inner: Inner {
@@ -254,15 +270,17 @@ impl QemuInstance {
         }
         menu_state::lock().power_off_stimuli_requested = true;
         // Give EP122 ~8 s to unmount USB (mirrors the real sub-CPU countdown).
-        wait_or_kill(&self.running, self.inner.pid, EP122_CLEANUP_WAIT);
+        // [intel-port] Waits scaled: the guest performs this work, so under
+        // TCG it needs guest_time_scale() times longer wall-clock.
+        wait_or_kill(&self.running, self.inner.pid, scaled(EP122_CLEANUP_WAIT));
         if self.running.load(Ordering::Acquire) {
             // EP122 cleanup done; trigger clean Linux shutdown via ACPI.
             let _ = self.inner.qmp.system_powerdown();
-            wait_or_kill(&self.running, self.inner.pid, ACPI_SHUTDOWN_WAIT);
+            wait_or_kill(&self.running, self.inner.pid, scaled(ACPI_SHUTDOWN_WAIT));
         }
         if self.running.load(Ordering::Acquire) {
             let _ = self.inner.qmp.quit();
-            wait_or_kill(&self.running, self.inner.pid, QMP_QUIT_WAIT);
+            wait_or_kill(&self.running, self.inner.pid, scaled(QMP_QUIT_WAIT));
         }
     }
 

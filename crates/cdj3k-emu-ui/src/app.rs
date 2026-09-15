@@ -594,13 +594,18 @@ impl eframe::App for CdjApp {
         // Wait for the worker to finish its graceful QEMU stop. Total budget
         // matches `instance.stop()` (8 s EP122 cleanup + 20 s ACPI shutdown +
         // 5 s QMP quit) plus a small loop-overhead margin.
-        let joined = cdj3k_emu_runtime::wait_for_worker(SHUTDOWN_WATCHDOG);
+        // [intel-port] Budget is the HVF baseline; under TCG the guest-side
+        // stop sequence takes guest_time_scale() times longer, and an early
+        // SIGKILL here is exactly the dirty-qcow2 path this watchdog guards.
+        let shutdown_watchdog =
+            SHUTDOWN_WATCHDOG * cdj3k_emu_platform::host::guest_time_scale();
+        let joined = cdj3k_emu_runtime::wait_for_worker(shutdown_watchdog);
         if !joined {
             // Watchdog elapsed: fall back to SIGTERM/SIGKILL on the QEMU child.
             // Loud so we know if the soft path keeps timing out.
             eprintln!(
                 "cdj3k-emu: soft shutdown watchdog ({}s) elapsed - sending SIGTERM/SIGKILL",
-                SHUTDOWN_WATCHDOG.as_secs()
+                shutdown_watchdog.as_secs()
             );
             cdj3k_emu_runtime::kill_qemu_child();
         }
