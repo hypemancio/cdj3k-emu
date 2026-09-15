@@ -32,19 +32,28 @@ CLEAN_AFTER_BUILD=0
 # **passwordless** root login bound to the QEMU host-forwarded port 2222 -
 # fine on a dev box, hostile elsewhere.
 ENABLE_SSH=0
+# [intel-port] --artifacts-only runs just the Docker stage ([1/5]) and stops:
+# everything it produces (kernel Image, .ko modules, guest tools) comes from
+# the repo + submodule alone. The remaining steps need the proprietary
+# Pioneer rootfs (build/initramfs-work/), which must never leave the local
+# machine - this flag is what CI runs.
+ARTIFACTS_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --clean)      CLEAN_AFTER_BUILD=1 ;;
         --enable-ssh) ENABLE_SSH=1 ;;
+        --artifacts-only) ARTIFACTS_ONLY=1 ;;
         -h|--help)
-            echo "Usage: ./build.sh [--clean] [--enable-ssh]"
-            echo "  --clean        remove unpacked rootfs workspace after build"
-            echo "  --enable-ssh   enable dropbear + passwordless root (dev only)"
+            echo "Usage: ./build.sh [--clean] [--enable-ssh] [--artifacts-only]"
+            echo "  --clean          remove unpacked rootfs workspace after build"
+            echo "  --enable-ssh     enable dropbear + passwordless root (dev only)"
+            echo "  --artifacts-only build only the Docker artifacts (kernel, modules,"
+            echo "                   guest tools) - no Pioneer rootfs required (CI)"
             exit 0
             ;;
         *)
             echo "ERROR: unknown argument: $arg" >&2
-            echo "Usage: ./build.sh [--clean] [--enable-ssh]" >&2
+            echo "Usage: ./build.sh [--clean] [--enable-ssh] [--artifacts-only]" >&2
             exit 1
             ;;
     esac
@@ -81,7 +90,9 @@ echo "================================================================"
 echo ""
 
 # Ensure Pioneer rootfs source exists
-if [[ ! -f "$INITRAMFS_ORIG" ]]; then
+# [intel-port] Not needed for --artifacts-only: the Docker stage builds from
+# the repo alone.
+if [[ "$ARTIFACTS_ONLY" -eq 0 && ! -f "$INITRAMFS_ORIG" ]]; then
     echo "ERROR: source initramfs not found: $INITRAMFS_ORIG" >&2
     exit 1
 fi
@@ -107,6 +118,31 @@ echo ""
 # Copy kernel image to canonical path
 cp "$DOCKER_OUT/Image" "$REPO_ROOT/build/Image"
 echo "  ✓  Image → build/Image"
+
+# Save tools to guest/out/ for bundle.sh
+# [intel-port] Moved up from step [3/5]: these files come straight from the
+# Docker stage (no rootfs involved) and are part of the --artifacts-only
+# output that CI publishes.
+mkdir -p "$REPO_ROOT/guest/out"
+# Every one of these is required: bundle.sh refuses a bundle without cfgd,
+# and the patch scripts abort the rootfs provision when a tool they install
+# is missing - long after a silently incomplete build looked fine here.
+for bin in ep122_shim.so subucom_forwarder_aarch64 subucom_live_aarch64 cfgd_aarch64 \
+           stemd_client_aarch64; do
+    cp "$DOCKER_OUT/$bin" "$REPO_ROOT/guest/out/$bin"
+done
+
+if [[ "$ARTIFACTS_ONLY" -eq 1 ]]; then
+    echo ""
+    echo "================================================================"
+    echo "  Artifacts-only build complete."
+    echo ""
+    echo "  Kernel:      build/Image"
+    echo "  Docker out:  build/docker-out/  (modules, dummy_drv.so, tools)"
+    echo "  Guest tools: guest/out/"
+    echo "================================================================"
+    exit 0
+fi
 
 # [2/5] Restore Pioneer rootfs
 echo "[2/5] Restoring rootfs from: $INITRAMFS_ORIG"
@@ -153,15 +189,8 @@ mkdir -p "$ROOTFS_DIR/home/root"
 cp "$DOCKER_OUT/ep122_shim.so" "$ROOTFS_DIR/home/root/ep122_shim.so"
 chmod 755 "$ROOTFS_DIR/home/root/ep122_shim.so"
 
-# Save tools to guest/out/ for bundle.sh
-mkdir -p "$REPO_ROOT/guest/out"
-# Every one of these is required: bundle.sh refuses a bundle without cfgd,
-# and the patch scripts abort the rootfs provision when a tool they install
-# is missing - long after a silently incomplete build looked fine here.
-for bin in ep122_shim.so subucom_forwarder_aarch64 subucom_live_aarch64 cfgd_aarch64 \
-           stemd_client_aarch64; do
-    cp "$DOCKER_OUT/$bin" "$REPO_ROOT/guest/out/$bin"
-done
+# [intel-port] guest/out/ tool copy moved up next to the Image copy (shared
+# with --artifacts-only).
 
 USB_IMG_SRC="$REPO_ROOT/build/usb.img"
 if [[ -f "$USB_IMG_SRC" ]]; then

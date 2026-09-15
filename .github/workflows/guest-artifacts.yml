@@ -1,0 +1,54 @@
+# [intel-port] Build the aarch64 guest artifacts (kernel Image, out-of-tree
+# .ko modules, guest tools) on GitHub's arm64-native runners and publish them
+# as a downloadable artifact.
+#
+# Why: on an Intel Mac (or any x86_64 box) the Docker stage would run under
+# qemu-user/binfmt emulation and take hours; ubuntu-24.04-arm runners build
+# it natively and are free on public repos.
+#
+# Privacy: `./build.sh --artifacts-only` needs only the repo + the
+# cdj3k-mods submodule. The proprietary Pioneer firmware/rootfs is NOT used
+# and must never be - artifacts of public repos are publicly downloadable.
+name: guest-artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [intel-port]
+    paths:
+      - 'guest/**'
+      - 'docker/**'
+      - 'build.sh'
+      - '.github/workflows/guest-artifacts.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # build.sh drives buildx itself (docker/ensure-buildx-builder.sh) and
+      # keeps its BuildKit cache in build/docker-cache; persist that between
+      # runs so the 6.6 kernel tree is only compiled when its inputs change.
+      - name: Restore BuildKit cache
+        uses: actions/cache@v4
+        with:
+          path: build/docker-cache
+          key: docker-cache-${{ runner.arch }}-${{ hashFiles('docker/Dockerfile', 'guest/**', 'build.sh') }}
+          restore-keys: |
+            docker-cache-${{ runner.arch }}-
+
+      - name: Build guest artifacts (native arm64)
+        run: ./build.sh --artifacts-only
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-artifacts
+          if-no-files-found: error
+          path: |
+            build/Image
+            build/docker-out/
+            guest/out/
