@@ -114,16 +114,32 @@ fi
 
 mkdir -p "${BUILD_DIR}"
 
+# [intel-port] HVF can only accelerate a guest of the host's own ISA, so the
+# aarch64 target builds HVF support on Apple Silicon only; on Intel Macs an
+# explicit --enable-hvf hard-fails configure, and the guest runs under TCG
+# (built unconditionally) instead.
+if [ "$(uname -m)" = "arm64" ]; then
+    ACCEL_FLAG="--enable-hvf"
+else
+    ACCEL_FLAG="--disable-hvf"
+fi
+
 if [ ! -f "${BUILD_DIR}/build.ninja" ]; then
     echo "==> Configuring …"
     # configure must be invoked from the build directory:
     # it runs `meson setup "$PWD" "$source_path"` internally.
+    #
+    # [intel-port] --enable-slirp is explicit because the app's fallback
+    # netdev is user-mode: without libslirp, configure would silently omit
+    # it and the failure would only surface at QEMU runtime ("network
+    # backend 'user' is not compiled").
     (
         cd "${BUILD_DIR}"
         "${SRC_DIR}/configure" \
             --prefix="${INSTALL_DIR}"   \
             --target-list=aarch64-softmmu \
-            --enable-hvf                \
+            ${ACCEL_FLAG}               \
+            --enable-slirp              \
             --enable-cocoa              \
             --disable-gtk               \
             --disable-sdl               \
