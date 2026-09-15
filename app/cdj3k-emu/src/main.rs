@@ -231,7 +231,13 @@ fn main() {
         config.qmp_port = 4445 + instance as u16;
         config.gdb_port = 1235 + instance as u16;
         config.emmc_img = emmc_img;
-        config.audio = inst_settings.audio_enabled;
+        // [intel-port] Hard-off under TCG regardless of saved settings: a
+        // coreaudio audiodev fed by a 20-50x-slower guest is guaranteed
+        // underrun churn. Omitting the device is a supported state (guest
+        // falls back to snd-dummy, see QemuConfig::build_argv) and keeps the
+        // guest-side virtio_snd pipeline watchdog from ever probing.
+        config.audio =
+            inst_settings.audio_enabled && !cdj3k_emu_platform::host::tcg_active();
         config.audio_device_uid = inst_settings.audio_device_uid.clone();
         config.mods_enabled = inst_settings.mods_enabled && !no_mods;
         config.mac = Some(inst_settings.mac);

@@ -571,7 +571,10 @@ fn apply_menu_to_config(config: &mut QemuConfig) {
     let s = menu_state::lock();
     config.service_mode = s.service_mode;
     config.mods_enabled = s.mods_enabled;
-    config.audio = s.audio_enabled;
+    // [intel-port] Same TCG hard-off as the initial config in main.rs: this
+    // runs on every QEMU respawn, so without the guard a menu toggle would
+    // re-enable audio under TCG.
+    config.audio = s.audio_enabled && !cdj3k_emu_platform::host::tcg_active();
     config.audio_device_uid = s.audio_device_uid.clone();
 }
 

@@ -86,7 +86,9 @@ impl QemuConfig {
             kernel,
             initramfs,
             // CDJ3K_EMU_TCG=1 in the environment selects TCG instead of HVF.
-            hvf: std::env::var_os("CDJ3K_EMU_TCG").is_none(),
+            // [intel-port] Was env-only; TCG is now also mandatory on hosts
+            // where HVF cannot run the aarch64 guest (Intel Macs).
+            hvf: !cdj3k_emu_platform::host::tcg_active(),
             shm: false,
             audio: false,
             audio_device_uid: None,
@@ -158,6 +160,27 @@ impl QemuConfig {
             args.extend(["-accel".into(), "hvf".into()]);
             args.extend(["-cpu".into(), "host".into()]);
         } else {
+            // [intel-port] Explicit accel instead of relying on QEMU's
+            // default pick. MTTCG (thread=multi) is sound for an aarch64
+            // guest on an x86_64 host - the host's x86-TSO memory model is
+            // stronger than the guest's, the safe direction - but MTTCG has
+            // a history of subtle guest-visible bugs, so
+            // CDJ3K_EMU_TCG_THREAD=single is the no-rebuild fallback for an
+            // inexplicably hung boot. cortex-a72 (RK3399 big core) instead
+            // of `max`, whose pointer-auth emulation is pathologically slow
+            // under TCG.
+            let thread_mode = match std::env::var("CDJ3K_EMU_TCG_THREAD").as_deref() {
+                Ok("single") => "single",
+                Ok("multi") | Err(_) => "multi",
+                Ok(other) => {
+                    eprintln!(
+                        "cdj3k-emu: ignoring invalid CDJ3K_EMU_TCG_THREAD={other:?} \
+                         (expected \"multi\" or \"single\"), using \"multi\""
+                    );
+                    "multi"
+                }
+            };
+            args.extend(["-accel".into(), format!("tcg,thread={thread_mode}")]);
             args.extend(["-cpu".into(), "cortex-a72".into()]);
         }
 
