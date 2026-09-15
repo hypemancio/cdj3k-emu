@@ -130,16 +130,26 @@ MACOS_DIR="$APP_DIR/Contents/MacOS"
 RESOURCES_DIR="$APP_DIR/Contents/Resources"
 
 SOCKET_VMNET_VERSION="1.2.2"
-SOCKET_VMNET_URL="https://github.com/lima-vm/socket_vmnet/releases/download/v${SOCKET_VMNET_VERSION}/socket_vmnet-${SOCKET_VMNET_VERSION}-arm64.tar.gz"
-# SHA-256 of the upstream arm64 release tarball.  Verified by running:
-#   shasum -a 256 socket_vmnet-1.2.2-arm64.tar.gz
-# against the asset linked from the v1.2.2 GitHub release notes.
-SOCKET_VMNET_SHA256="c7bf62308fbcfdc29bdfb8373c9b1951f7ac2396446e4390919796a94972e6dc"
+# [intel-port] The release asset is per-arch; pick the one matching the host
+# so the bundled helper can actually exec (an arm64 Mach-O bundled on an
+# Intel Mac signs fine but dies at spawn). SHA-256 verified per-arch by
+# running `shasum -a 256` against the assets linked from the v1.2.2 GitHub
+# release notes.
+SOCKET_VMNET_ARCH="$(uname -m)"   # arm64 | x86_64 (matches upstream asset names)
+case "$SOCKET_VMNET_ARCH" in
+    arm64)  SOCKET_VMNET_SHA256="c7bf62308fbcfdc29bdfb8373c9b1951f7ac2396446e4390919796a94972e6dc" ;;
+    x86_64) SOCKET_VMNET_SHA256="2968a82c97e692c2d36f87230152e8018e00589c1b598e8257775adfe83800a1" ;;
+    *)
+        echo "ERROR: unsupported host arch for socket_vmnet: $SOCKET_VMNET_ARCH" >&2
+        exit 1
+        ;;
+esac
+SOCKET_VMNET_URL="https://github.com/lima-vm/socket_vmnet/releases/download/v${SOCKET_VMNET_VERSION}/socket_vmnet-${SOCKET_VMNET_VERSION}-${SOCKET_VMNET_ARCH}.tar.gz"
 # Cached archive lives under build/ (gitignored).  Re-used across bundle runs
 # so a clean build doesn't re-download the same tarball; the SHA-256 check
 # below guards against a corrupted or tampered cache.
 SOCKET_VMNET_CACHE_DIR="$REPO_ROOT/build/cache"
-SOCKET_VMNET_CACHE_FILE="$SOCKET_VMNET_CACHE_DIR/socket_vmnet-${SOCKET_VMNET_VERSION}-arm64.tar.gz"
+SOCKET_VMNET_CACHE_FILE="$SOCKET_VMNET_CACHE_DIR/socket_vmnet-${SOCKET_VMNET_VERSION}-${SOCKET_VMNET_ARCH}.tar.gz"
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 if [[ "$DO_BUILD" -eq 1 ]]; then
